@@ -4,10 +4,36 @@ from google.generativeai.types import GenerationConfig
 import pandas as pd
 import time
 import re
+import random
+import smtplib
+from email.mime.text import MIMEText
 from datetime import datetime
 
 # --- 系統與頁面設定 ---
 st.set_page_config(page_title="助人技巧 AI 模擬系統 (教學專用版)", layout="wide", page_icon="🧑‍🏫")
+
+# ==========================================
+# 📧 系統發信帳號設定 (請填寫您的 Gmail 與應用程式密碼)
+# ==========================================
+SENDER_EMAIL = "your_email@gmail.com"  # 替換成用來寄信的 Gmail
+SENDER_PASSWORD = "your_app_password"  # 替換成該 Gmail 的 16 碼「應用程式密碼」
+
+def send_otp_email(receiver_email, otp_code):
+    if SENDER_EMAIL == "your_email@gmail.com":
+        return False, "⚠️ 系統尚未設定發信信箱 (SENDER_EMAIL)，請教師於程式碼中設定。"
+        
+    msg = MIMEText(f"同學您好：\n\n您的「助人技巧 AI 模擬系統」登入驗證碼為：【 {otp_code} 】\n\n請回到系統網頁輸入此 6 位數密碼以完成登入。\n祝您演練順利！\n\n(系統自動發送，請勿回信)")
+    msg['Subject'] = "【助人技巧 AI 模擬系統】登入驗證碼"
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = receiver_email
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.send_message(msg)
+        return True, "發送成功"
+    except Exception as e:
+        return False, str(e)
 
 # --- 🌟 本研究專屬白名單 (Whitelist) 🌟 ---
 WHITELIST = {
@@ -41,12 +67,10 @@ CASES = {
 }
 
 # --- 15項助人技巧督導 Prompt ---
-SUPERVISOR_PROMPT = """你是一位資深的諮商心理師臨床督導。請根據以下助人對話紀錄，評估受訓者在 Hill 助人技巧（涵蓋探索、洞察、行動三階段）的使用品質。
+SUPERVISOR_PROMPT = """你是一位資深的諮商心理師臨床督導。請根據以下助人對話紀錄，評估受訓者在 Hill 助人技巧的使用品質。
 請嚴格遵守以下格式給予回饋：
-
 一、總體臨床評估（質性回饋）：
 請具體說明學生表現好的地方，以及需要改進的盲點。
-
 二、15項助人技巧評分（量化回饋，0-5分）：
 格式：「技巧名稱：[X] 分」
 1. 專注、2. 傾聽、3. 重述、4. 開放式問句、5. 情感反映、6. 探索性的自我表露、7. 意圖性的沉默、8. 挑戰、9. 解釋、10. 洞察性的自我表露、11. 立即性、12. 訊息提供、13. 直接指導、14. 角色扮演及行為演練、15. 家庭作業。
@@ -56,12 +80,13 @@ SUPERVISOR_PROMPT = """你是一位資深的諮商心理師臨床督導。請根
 keys_to_init = {
     "api_keys": [], "current_key_index": 0, "history": [],
     "chat_session": None, "is_ended": False, "supervisor_feedback": "",
-    "is_started": False, "context_data": {}, "is_logged_in": False, "student_id": ""
+    "is_started": False, "context_data": {}, "is_logged_in": False, "student_id": "",
+    "otp_sent": False, "generated_otp": "", "target_email": ""
 }
 for k, v in keys_to_init.items():
     if k not in st.session_state: st.session_state[k] = v
 
-# --- 側邊欄：API Key 與登出設定 ---
+# --- 側邊欄設定 ---
 st.sidebar.title("⚙️ 系統設定")
 api_input = st.sidebar.text_area("🔑 輸入 Gemini API Key (多組請換行)", value="\n".join(st.session_state.api_keys))
 if api_input: 
@@ -76,28 +101,51 @@ if st.session_state.is_logged_in:
             del st.session_state[key]
         st.rerun()
 
-# --- 畫面 0：登入驗證畫面 ---
+# --- 畫面 0：雙重登入驗證畫面 (OTP) ---
 if not st.session_state.is_logged_in:
     st.title("🔐 助人技巧 AI 模擬系統 (登入)")
-    st.info("本系統僅限受邀名單使用，請輸入您的學號進行驗證。")
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        with st.form("login_form"):
+        if not st.session_state.otp_sent:
+            st.info("請輸入學號，系統將寄送驗證碼至您的信箱。")
             user_id_input = st.text_input("📝 請輸入學號 (Student ID)：", placeholder="例如：MB1132018")
-            submit_btn = st.form_submit_button("登入系統", type="primary", use_container_width=True)
-            
-            if submit_btn:
-                # 自動轉大寫並去除空白，防止學生輸入時多打空格
+            if st.button("發送驗證碼", type="primary", use_container_width=True):
                 clean_id = user_id_input.strip().upper() 
                 if clean_id in WHITELIST:
-                    st.session_state.is_logged_in = True
                     st.session_state.student_id = clean_id
-                    st.success(f"✅ 驗證成功！歡迎 {clean_id}。")
-                    time.sleep(1)
-                    st.rerun()
+                    st.session_state.target_email = WHITELIST[clean_id]
+                    # 隨機生成 6 位數 OTP
+                    st.session_state.generated_otp = str(random.randint(100000, 999999))
+                    
+                    with st.spinner("📧 正在發送驗證碼至您的信箱，請稍候..."):
+                        success, msg = send_otp_email(st.session_state.target_email, st.session_state.generated_otp)
+                        if success:
+                            st.session_state.otp_sent = True
+                            st.rerun()
+                        else:
+                            st.error(f"郵件發送失敗：{msg}")
                 else:
-                    st.error("❌ 學號不在白名單中，請重新確認或聯繫授課教師。")
+                    st.error("❌ 學號不在白名單中，請重新確認或聯繫教師。")
+        else:
+            st.success(f"📧 驗證碼已發送至：**{st.session_state.target_email}** (請檢查收件匣或垃圾郵件)")
+            otp_input = st.text_input("🔑 請輸入 6 位數驗證碼：", max_chars=6)
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("驗證並登入", type="primary", use_container_width=True):
+                    if otp_input == st.session_state.generated_otp:
+                        st.session_state.is_logged_in = True
+                        st.success(f"✅ 登入成功！歡迎 {st.session_state.student_id}。")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("❌ 驗證碼錯誤，請重新輸入！")
+            with c2:
+                if st.button("重新輸入學號", use_container_width=True):
+                    st.session_state.otp_sent = False
+                    st.session_state.generated_otp = ""
+                    st.rerun()
 
 # --- 畫面 1：初始設定與讀檔 ---
 elif not st.session_state.is_started:
@@ -203,14 +251,12 @@ elif st.session_state.is_ended:
 
     st.markdown(st.session_state.supervisor_feedback)
     
-    # 下載檔案，加入學號以便老師辨識
     df_save = pd.DataFrame([{"role": m["role"], "content": m["parts"][0]} for m in st.session_state.history])
     csv_save = df_save.to_csv(index=False).encode('utf-8-sig')
     student_id_str = st.session_state.student_id
     st.download_button("💾 下載本次紀錄與報告 (CSV)", data=csv_save, file_name=f"{student_id_str}_晤談報告_{datetime.now().strftime('%m%d_%H%M')}.csv", mime="text/csv")
     
     if st.button("🔄 返回首頁開啟新練習"):
-        # 保留 api_keys, is_logged_in, student_id，讓學生不用重新登入
         keys_to_keep = ["api_keys", "is_logged_in", "student_id"]
         for key in list(st.session_state.keys()):
             if key not in keys_to_keep: 
