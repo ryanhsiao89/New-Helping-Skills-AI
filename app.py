@@ -16,7 +16,7 @@ st.set_page_config(page_title="助人技巧 AI 模擬系統 (教學驗證版)", 
 # 📧 系統發信帳號設定 (請教師務必在此填寫您的發信帳號)
 # ==========================================
 SENDER_EMAIL = "ryanhsiao89@gmail.com"  # 填入發信用的 Gmail
-SENDER_PASSWORD = "hopehope20151205"  # 填入 16 碼「應用程式密碼」
+SENDER_PASSWORD = "amaywmzfvzwvcple"  # 填入 16 碼「應用程式密碼」
 
 # --- 🌟 本研究專屬白名單 (學號與信箱綁定) 🌟 ---
 WHITELIST = {
