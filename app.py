@@ -9,6 +9,29 @@ from datetime import datetime
 # --- 系統與頁面設定 ---
 st.set_page_config(page_title="助人技巧 AI 模擬系統 (教學專用版)", layout="wide", page_icon="🧑‍🏫")
 
+# --- 🌟 本研究專屬白名單 (Whitelist) 🌟 ---
+WHITELIST = {
+    'BB1112067': 'bb1112067@hcu.edu.tw',
+    'BB1122013': 'bb1122013@hcu.edu.tw',
+    'BB1122034': 'bb1122034@hcu.edu.tw',
+    'BB1122053': 'jasminehu0711@gmail.com',
+    'BB1125034': 'bb1125034@hcu.edu.tw',
+    'GB1132002': 'gb1132002@hcu.edu.tw',
+    'GB1142006': 'gb1142006@hcu.edu.tw',
+    'KA1140202': 'ka1140202@hcu.edu.tw',
+    'KA1140223': 'ka1140223@hcu.edu.tw',
+    'KA1140225': 'ka1140225@hcu.edu.tw',
+    'KA1140229': 'ka1140229@hcu.edu.tw',
+    'KB1140202': 'kb1140202@hcu.edu.tw',
+    'MB1132018': 'mb1132018@hcu.edu.tw',
+    'MB1142005': 'mb1142005@hcu.edu.tw',
+    'MB1142008': 'mb1142008@hcu.edu.tw',
+    'MB1142123': 'mb1142123@hcu.edu.tw',
+    'KB1140128': 'kb1140128@hcu.edu.tw',
+    '112152516': 'ryanhsiao89@gmail.com',
+    'HOPE HARN': 'hopehopejoy@gmail.com'
+}
+
 # --- 預設個案庫 ---
 CASES = {
     "【人際焦慮】小明 (大學生)": "小明是一名大二男生，主訴是嚴重的人際焦慮。他害怕上台報告，總覺得同學在背後嘲笑他，導致最近開始逃避去學校。",
@@ -30,24 +53,54 @@ SUPERVISOR_PROMPT = """你是一位資深的諮商心理師臨床督導。請根
 """
 
 # --- 初始化 Session State ---
-if "api_keys" not in st.session_state: st.session_state.api_keys = []
-if "current_key_index" not in st.session_state: st.session_state.current_key_index = 0
-if "history" not in st.session_state: st.session_state.history = []
-if "chat_session" not in st.session_state: st.session_state.chat_session = None
-if "is_ended" not in st.session_state: st.session_state.is_ended = False
-if "supervisor_feedback" not in st.session_state: st.session_state.supervisor_feedback = ""
-if "is_started" not in st.session_state: st.session_state.is_started = False
-if "context_data" not in st.session_state: st.session_state.context_data = {}
+keys_to_init = {
+    "api_keys": [], "current_key_index": 0, "history": [],
+    "chat_session": None, "is_ended": False, "supervisor_feedback": "",
+    "is_started": False, "context_data": {}, "is_logged_in": False, "student_id": ""
+}
+for k, v in keys_to_init.items():
+    if k not in st.session_state: st.session_state[k] = v
 
-# --- 側邊欄：API Key 設定 ---
+# --- 側邊欄：API Key 與登出設定 ---
 st.sidebar.title("⚙️ 系統設定")
 api_input = st.sidebar.text_area("🔑 輸入 Gemini API Key (多組請換行)", value="\n".join(st.session_state.api_keys))
 if api_input: 
     parsed_keys = [k.strip() for k in re.split(r'[\n,]+', api_input) if k.strip()]
     st.session_state.api_keys = parsed_keys
 
+if st.session_state.is_logged_in:
+    st.sidebar.markdown("---")
+    st.sidebar.write(f"👤 目前使用者：**{st.session_state.student_id}**")
+    if st.sidebar.button("🚪 登出系統"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+# --- 畫面 0：登入驗證畫面 ---
+if not st.session_state.is_logged_in:
+    st.title("🔐 助人技巧 AI 模擬系統 (登入)")
+    st.info("本系統僅限受邀名單使用，請輸入您的學號進行驗證。")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.form("login_form"):
+            user_id_input = st.text_input("📝 請輸入學號 (Student ID)：", placeholder="例如：MB1132018")
+            submit_btn = st.form_submit_button("登入系統", type="primary", use_container_width=True)
+            
+            if submit_btn:
+                # 自動轉大寫並去除空白，防止學生輸入時多打空格
+                clean_id = user_id_input.strip().upper() 
+                if clean_id in WHITELIST:
+                    st.session_state.is_logged_in = True
+                    st.session_state.student_id = clean_id
+                    st.success(f"✅ 驗證成功！歡迎 {clean_id}。")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("❌ 學號不在白名單中，請重新確認或聯繫授課教師。")
+
 # --- 畫面 1：初始設定與讀檔 ---
-if not st.session_state.is_started:
+elif not st.session_state.is_started:
     st.title("🧑‍🏫 助人技巧模擬演練系統 (教學版)")
     tab1, tab2 = st.tabs(["🆕 開啟新晤談", "📂 讀取先前的紀錄 (CSV)"])
     
@@ -63,7 +116,7 @@ if not st.session_state.is_started:
         
         if st.button("🚀 開始新晤談", type="primary"):
             if not st.session_state.api_keys:
-                st.error("❌ 請先輸入 API Key！")
+                st.error("❌ 請先於左側面板輸入 API Key！")
             else:
                 st.session_state.context_data = {"case": selected_case, "session_num": session_num, "relation": relationship_quality, "context": context_text}
                 system_instruction = f"你是個案{selected_case}。描述：{CASES.get(selected_case)}。第{session_num}次晤談，關係：{relationship_quality}。{context_text}。絕對不要扮演諮商師。"
@@ -79,7 +132,7 @@ if not st.session_state.is_started:
         uploaded_file = st.file_uploader("請上傳先前下載的 CSV 檔", type="csv")
         if uploaded_file is not None:
             if not st.session_state.api_keys:
-                st.error("❌ 請先輸入 API Key！")
+                st.error("❌ 請先於左側面板輸入 API Key！")
             else:
                 try:
                     df = pd.read_csv(uploaded_file)
@@ -117,7 +170,6 @@ elif st.session_state.is_started and not st.session_state.is_ended:
                 st.session_state.history.append({"role": "model", "parts": [response.text]})
                 st.rerun()
             except Exception as e:
-                # 簡單輪轉 Key 機制
                 if len(st.session_state.api_keys) > 1:
                     st.session_state.current_key_index = (st.session_state.current_key_index + 1) % len(st.session_state.api_keys)
                     genai.configure(api_key=st.session_state.api_keys[st.session_state.current_key_index])
@@ -151,12 +203,16 @@ elif st.session_state.is_ended:
 
     st.markdown(st.session_state.supervisor_feedback)
     
-    # 準備下載檔案
+    # 下載檔案，加入學號以便老師辨識
     df_save = pd.DataFrame([{"role": m["role"], "content": m["parts"][0]} for m in st.session_state.history])
     csv_save = df_save.to_csv(index=False).encode('utf-8-sig')
-    st.download_button("💾 下載本次紀錄與報告 (CSV)", data=csv_save, file_name=f"晤談報告_{datetime.now().strftime('%m%d_%H%M')}.csv", mime="text/csv")
+    student_id_str = st.session_state.student_id
+    st.download_button("💾 下載本次紀錄與報告 (CSV)", data=csv_save, file_name=f"{student_id_str}_晤談報告_{datetime.now().strftime('%m%d_%H%M')}.csv", mime="text/csv")
     
     if st.button("🔄 返回首頁開啟新練習"):
+        # 保留 api_keys, is_logged_in, student_id，讓學生不用重新登入
+        keys_to_keep = ["api_keys", "is_logged_in", "student_id"]
         for key in list(st.session_state.keys()):
-            if key != "api_keys": del st.session_state[key]
+            if key not in keys_to_keep: 
+                del st.session_state[key]
         st.rerun()
