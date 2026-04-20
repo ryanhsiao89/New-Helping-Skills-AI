@@ -1,6 +1,6 @@
 import streamlit as st
 import google.generativeai as genai
-from google.generativeai.types import GenerationConfig
+from google.generativeai.types import GenerationConfig, HarmCategory, HarmBlockThreshold
 import pandas as pd
 import time
 import re
@@ -13,10 +13,20 @@ from datetime import datetime
 st.set_page_config(page_title="助人技巧 AI 模擬系統 (教學驗證版)", layout="wide", page_icon="🧑‍🏫")
 
 # ==========================================
-# 📧 系統發信帳號設定 (請教師務必在此填寫您的發信帳號)
+# 📧 系統發信帳號設定
 # ==========================================
-SENDER_EMAIL = "ryanhsiao89@gmail.com"  # 填入發信用的 Gmail
-SENDER_PASSWORD = "amaywmzfvzwvcple"  # 填入 16 碼「應用程式密碼」
+SENDER_EMAIL = "your_email@gmail.com"  # 換成您的 Gmail
+SENDER_PASSWORD = "your_app_password"  # 換成 16 碼密碼 (務必刪除中間的空格)
+
+# ==========================================
+# 🛡️ 關閉 AI 安全過濾 (避免諮商敏感詞彙遭攔截)
+# ==========================================
+SAFETY_SETTINGS = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
 
 # --- 🌟 本研究專屬白名單 (學號與信箱綁定) 🌟 ---
 WHITELIST = {
@@ -147,7 +157,8 @@ elif not st.session_state.is_started:
                 st.session_state.context_data = {"case": sel_case, "session_num": s_num, "relation": rel, "context": ctx_t}
                 st.session_state.is_started = True
                 genai.configure(api_key=st.session_state.api_keys[0])
-                model = genai.GenerativeModel("gemini-1.5-flash")
+                # 加入 SAFETY_SETTINGS
+                model = genai.GenerativeModel("gemini-1.5-flash", safety_settings=SAFETY_SETTINGS)
                 st.session_state.history = [{"role": "user", "parts": [f"你是個案{sel_case}。關係：{rel}。絕對不要扮演諮商師。"]}, {"role": "model", "parts": ["(坐在椅子上等待...)"]}]
                 st.session_state.chat_session = model.start_chat(history=st.session_state.history)
                 st.rerun()
@@ -158,7 +169,8 @@ elif not st.session_state.is_started:
             st.session_state.history = [{"role": r['role'], "parts": [str(r['content'])]} for _, r in df.iterrows()]
             st.session_state.is_started = True
             genai.configure(api_key=st.session_state.api_keys[0])
-            st.session_state.chat_session = genai.GenerativeModel("gemini-1.5-flash").start_chat(history=st.session_state.history)
+            # 加入 SAFETY_SETTINGS
+            st.session_state.chat_session = genai.GenerativeModel("gemini-1.5-flash", safety_settings=SAFETY_SETTINGS).start_chat(history=st.session_state.history)
             st.rerun()
 
 # --- 畫面 2：對話演練 ---
@@ -187,11 +199,20 @@ elif st.session_state.is_ended:
             log = "\n".join([f"{'助人者' if m['role']=='user' else '個案'}: {m['parts'][0]}" for m in st.session_state.history[1:]])
             try:
                 genai.configure(api_key=st.session_state.api_keys[0])
-                resp = genai.GenerativeModel("gemini-1.5-flash").generate_content(f"{SUPERVISOR_PROMPT}\n\n{log}")
+                # 加入 SAFETY_SETTINGS
+                resp = genai.GenerativeModel("gemini-1.5-flash", safety_settings=SAFETY_SETTINGS).generate_content(f"{SUPERVISOR_PROMPT}\n\n{log}")
                 st.session_state.supervisor_feedback = resp.text
                 st.rerun()
-            except Exception as e: st.error(f"督導生成失敗: {e}")
-    st.markdown(st.session_state.supervisor_feedback)
+            except Exception as e: 
+                # 攔截安全機制的錯誤並給予友善提示
+                if "safety_ratings" in str(e):
+                    st.error("⚠️ 督導生成失敗：您們的對話中可能包含了過於極端的字眼，觸發了 Google 底層的防護機制。請直接點擊下方下載您的對話紀錄。")
+                else:
+                    st.error(f"督導生成失敗: {e}")
+
+    if st.session_state.supervisor_feedback:
+        st.markdown(st.session_state.supervisor_feedback)
+    
     df_s = pd.DataFrame([{"role": m["role"], "content": m["parts"][0]} for m in st.session_state.history])
     st.download_button("💾 下載紀錄 (CSV)", data=df_s.to_csv(index=False).encode('utf-8-sig'), file_name=f"{st.session_state.student_id}_報告.csv")
     if st.button("🔄 返回首頁"):
