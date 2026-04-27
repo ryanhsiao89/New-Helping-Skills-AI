@@ -19,7 +19,7 @@ st.set_page_config(
     page_icon="🧑‍🏫"
 )
 
-MODEL_NAME = "gemini-1.5-flash"
+MODEL_NAME = "gemini-2.5-flash"
 
 # 🌟 修正點 1：將個案與督導的溫度分開。個案需要一點情緒(0.4)，督導需要絕對理性(0.0)
 CLIENT_TEMPERATURE = 0.4
