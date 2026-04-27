@@ -24,10 +24,10 @@ TEMPERATURE = 0.0
 
 
 # =========================================================
-# 系統發信帳號設定
+# 系統發信帳號設定 (⚠️ 貼上後請務必修改這裡 ⚠️)
 # =========================================================
-SENDER_EMAIL = "your_email@gmail.com"       # 請換成您的 Gmail
-SENDER_PASSWORD = "your_app_password"       # 請換成 16 碼 App Password
+SENDER_EMAIL = "您的真實Gmail@gmail.com"       # <--- 請換成您用來寄信的 Gmail
+SENDER_PASSWORD = "您的16碼應用程式密碼"         # <--- 請換成該 Gmail 的 16 碼 App Password
 
 
 # =========================================================
@@ -98,8 +98,8 @@ SUPERVISOR_PROMPT = """
 # OTP 發信函式
 # =========================================================
 def send_otp_email(receiver_email, otp_code):
-    if SENDER_EMAIL == "your_email@gmail.com":
-        return False, "⚠️ 教師尚未設定發信信箱 (SENDER_EMAIL)，請通知管理員。"
+    if SENDER_EMAIL == "your_email@gmail.com" or SENDER_EMAIL == "您的真實Gmail@gmail.com":
+        return False, "⚠️ 寄件失敗：請先在程式碼第 29 與 30 行，替換為您真實的發信 Gmail 與應用程式密碼。"
 
     msg = MIMEText(
         f"同學您好：\n\n"
