@@ -26,8 +26,8 @@ TEMPERATURE = 0.0
 # =========================================================
 # 系統發信帳號設定 (⚠️ 貼上後請務必修改這裡 ⚠️)
 # =========================================================
-SENDER_EMAIL = "您的真實Gmail@gmail.com"       # <--- 請換成您用來寄信的 Gmail
-SENDER_PASSWORD = "您的16碼應用程式密碼"         # <--- 請換成該 Gmail 的 16 碼 App Password
+SENDER_EMAIL = "ryanhsiao89@gmail.com"       # <--- 請換成您用來寄信的 Gmail
+SENDER_PASSWORD = "umnq csuk lzru tzrq"         # <--- 請換成該 Gmail 的 16 碼 App Password
 
 
 # =========================================================
