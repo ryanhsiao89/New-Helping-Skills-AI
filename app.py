@@ -20,15 +20,15 @@ st.set_page_config(
     page_icon="🧑‍🏫",
 )
 
-DEFAULT_MODEL_NAME = "gemini-2.5-flash"
-MODEL_NAME = DEFAULT_MODEL_NAME
+MODEL_NAME = "gemini-2.5-flash-lite"
 
 CLIENT_TEMPERATURE = 0.4
 SUPERVISOR_TEMPERATURE = 0.0
 
 MAX_CLIENT_OUTPUT_TOKENS = 220
-MAX_SUPERVISOR_OUTPUT_TOKENS = 1800
 MAX_MEMORY_OUTPUT_TOKENS = 700
+MAX_SUPERVISOR_CHUNK_OUTPUT_TOKENS = 900
+MAX_SUPERVISOR_FINAL_OUTPUT_TOKENS = 2200
 
 RECENT_TURNS_FOR_CLIENT = 8
 MEMORY_UPDATE_EVERY_MESSAGES = 8
@@ -39,7 +39,7 @@ RETRY_WAIT_SECONDS = 20
 
 
 # =========================================================
-# Secrets / 設定讀取
+# Secrets 設定：只放寄信帳號與白名單，不放 Gemini API Key
 # =========================================================
 def safe_secret_get(section, default=None):
     try:
@@ -53,12 +53,6 @@ def load_email_config():
     sender = str(email_cfg.get("sender", os.getenv("SENDER_EMAIL", ""))).strip()
     password = str(email_cfg.get("password", os.getenv("SENDER_PASSWORD", ""))).strip()
     return sender, password
-
-
-def load_secret_api_keys():
-    gemini_cfg = safe_secret_get("gemini", {}) or {}
-    raw = gemini_cfg.get("api_keys", os.getenv("GEMINI_API_KEYS", ""))
-    return parse_api_keys(raw)
 
 
 def load_whitelist():
@@ -163,19 +157,25 @@ init_session_state()
 
 
 # =========================================================
-# 工具函式：API Key
+# API Key 工具函式：學生自行輸入
 # =========================================================
 def parse_api_keys(raw_text):
     if not raw_text:
         return []
+
     if isinstance(raw_text, list):
         return [str(k).strip() for k in raw_text if str(k).strip()]
+
     return [k.strip() for k in re.split(r"[\n,]+", str(raw_text)) if k.strip()]
 
 
 def get_current_api_key():
     if not st.session_state.api_keys:
-        raise RuntimeError("尚未設定任何 Gemini API Key。")
+        raise RuntimeError("尚未輸入任何 Gemini API Key。請在左側欄貼上自己的 Gemini API Key。")
+
+    if st.session_state.current_key_index >= len(st.session_state.api_keys):
+        st.session_state.current_key_index = 0
+
     return st.session_state.api_keys[st.session_state.current_key_index]
 
 
@@ -197,6 +197,7 @@ def switch_to_next_key():
     for step in range(1, total + 1):
         idx = (st.session_state.current_key_index + step) % total
         key = st.session_state.api_keys[idx]
+
         if st.session_state.key_cooldowns.get(key, 0) <= now:
             st.session_state.current_key_index = idx
             return True
@@ -260,8 +261,10 @@ def get_client_system_instruction():
 
 def normalize_role(role_value):
     role = str(role_value).strip().lower()
+
     if role in ["assistant", "model", "ai", "client", "個案"]:
         return "model"
+
     return "user"
 
 
@@ -304,6 +307,7 @@ def history_to_gemini_format(exclude_last_user=False):
         formatted.append({"role": "model", "parts": ["(我會維持個案角色。)"]})
 
     memory = st.session_state.get("case_memory", "").strip()
+
     if memory:
         formatted.append({
             "role": "user",
@@ -351,8 +355,9 @@ def build_client_model():
         )
 
 
-def build_supervisor_model(max_output_tokens=MAX_SUPERVISOR_OUTPUT_TOKENS):
+def build_supervisor_model(max_output_tokens=MAX_SUPERVISOR_FINAL_OUTPUT_TOKENS):
     genai.configure(api_key=get_current_api_key())
+
     return genai.GenerativeModel(
         model_name=MODEL_NAME,
         generation_config=GenerationConfig(
@@ -375,6 +380,7 @@ def extract_response_text(resp):
         candidates = getattr(resp, "candidates", []) or []
         parts = candidates[0].content.parts
         text = "\n".join(getattr(p, "text", "") for p in parts if getattr(p, "text", ""))
+
         if text.strip():
             return text.strip()
     except Exception:
@@ -384,7 +390,7 @@ def extract_response_text(resp):
     raise RuntimeError(f"模型沒有回傳可用文字。{feedback}")
 
 
-def generate_content_with_failover(prompt, purpose="AI生成", max_output_tokens=MAX_SUPERVISOR_OUTPUT_TOKENS):
+def generate_content_with_failover(prompt, purpose="AI生成", max_output_tokens=MAX_SUPERVISOR_FINAL_OUTPUT_TOKENS):
     waited_once = False
 
     while True:
@@ -443,6 +449,7 @@ def looks_like_role_confusion(text):
         r"做得很好",
         r"我們今天的晤談目標",
     ]
+
     return any(re.search(p, text) for p in patterns)
 
 
@@ -533,6 +540,7 @@ def maybe_update_case_memory():
         return
 
     delta_hist = hist[last_len:summary_until]
+
     if len(delta_hist) < MEMORY_UPDATE_EVERY_MESSAGES:
         return
 
@@ -564,9 +572,11 @@ def maybe_update_case_memory():
             purpose="壓縮對話記憶",
             max_output_tokens=MAX_MEMORY_OUTPUT_TOKENS,
         )
+
         st.session_state.case_memory = new_memory
         st.session_state.last_memory_update_len = summary_until
         rebuild_chat_session(exclude_last_user=False)
+
     except Exception:
         pass
 
@@ -608,8 +618,9 @@ def generate_supervisor_feedback_chunked():
         partial = generate_content_with_failover(
             chunk_prompt,
             purpose=f"督導分段評估 {idx}",
-            max_output_tokens=MAX_SUPERVISOR_OUTPUT_TOKENS,
+            max_output_tokens=MAX_SUPERVISOR_CHUNK_OUTPUT_TOKENS,
         )
+
         partial_reports.append(f"【第 {idx} 段局部評估】\n{partial}")
 
     merge_prompt = f"""
@@ -628,7 +639,7 @@ def generate_supervisor_feedback_chunked():
     return generate_content_with_failover(
         merge_prompt,
         purpose="督導總報告",
-        max_output_tokens=MAX_SUPERVISOR_OUTPUT_TOKENS,
+        max_output_tokens=MAX_SUPERVISOR_FINAL_OUTPUT_TOKENS,
     )
 
 
@@ -637,7 +648,7 @@ def generate_supervisor_feedback_chunked():
 # =========================================================
 def send_otp_email(receiver_email, otp_code):
     if not SENDER_EMAIL or not SENDER_PASSWORD:
-        return False, "寄件信箱尚未設定。請在 Streamlit secrets 設定 email.sender 與 email.password。"
+        return False, "寄件信箱尚未設定。請在 Streamlit Secrets 設定 email.sender 與 email.password。"
 
     msg = MIMEText(
         f"同學您好：\n\n"
@@ -646,6 +657,7 @@ def send_otp_email(receiver_email, otp_code):
         f"祝演練順利！",
         _charset="utf-8",
     )
+
     msg["Subject"] = "【助人技巧 AI 模擬系統】登入驗證碼"
     msg["From"] = SENDER_EMAIL
     msg["To"] = receiver_email
@@ -654,7 +666,9 @@ def send_otp_email(receiver_email, otp_code):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(SENDER_EMAIL, SENDER_PASSWORD.replace(" ", ""))
             server.send_message(msg)
+
         return True, "發送成功"
+
     except Exception as e:
         return False, str(e)
 
@@ -670,6 +684,8 @@ def reset_practice_state():
         "case_memory",
         "last_memory_update_len",
         "needs_chat_rebuild",
+        "current_key_index",
+        "key_cooldowns",
     ]
 
     for key in keys_to_reset:
@@ -684,34 +700,55 @@ def reset_practice_state():
 # =========================================================
 st.sidebar.title("⚙️ 系統設定")
 
-secret_api_keys = load_secret_api_keys()
-
-if secret_api_keys:
-    st.session_state.api_keys = secret_api_keys
-    st.sidebar.success(f"已從 secrets 載入 {len(secret_api_keys)} 組 Gemini API Key。")
-else:
-    api_input = st.sidebar.text_area(
-        "🔑 輸入 Gemini API Key",
-        value="\n".join(st.session_state.api_keys),
-        help="多組 Key 請用換行或逗號分隔。",
-    )
-    st.session_state.api_keys = parse_api_keys(api_input)
-
-st.sidebar.caption("提醒：若多組 API Key 來自同一個 Google Cloud project，Gemini quota 通常仍會一起計算。")
-
-if st.session_state.api_keys:
-    st.sidebar.write(
-        f"目前 Key：第 {st.session_state.current_key_index + 1} / {len(st.session_state.api_keys)} 組"
-    )
-
 if st.session_state.is_logged_in:
-    st.sidebar.markdown("---")
     st.sidebar.write(f"👤 當前使用者：**{st.session_state.student_id}**")
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🔑 Gemini API Key")
+
+    st.sidebar.caption(
+        "請貼上你自己的 Gemini API Key。Key 只會在本次使用期間暫存在 session，"
+        "不會寫入 GitHub 或 Streamlit Secrets。"
+    )
+
+    student_key_1 = st.sidebar.text_input(
+        "Gemini API Key 1",
+        type="password",
+        key="student_api_key_1",
+    )
+
+    student_key_2 = st.sidebar.text_input(
+        "Gemini API Key 2（選填）",
+        type="password",
+        key="student_api_key_2",
+    )
+
+    st.session_state.api_keys = parse_api_keys([student_key_1, student_key_2])
+
+    if st.session_state.api_keys:
+        if st.session_state.current_key_index >= len(st.session_state.api_keys):
+            st.session_state.current_key_index = 0
+
+        st.sidebar.success(f"已輸入 {len(st.session_state.api_keys)} 組 API Key。")
+        st.sidebar.write(
+            f"目前使用：第 {st.session_state.current_key_index + 1} / {len(st.session_state.api_keys)} 組"
+        )
+    else:
+        st.sidebar.warning("請先輸入至少 1 組 Gemini API Key。")
+
+    st.sidebar.caption(
+        "提醒：若兩組 API Key 來自同一個 Google Cloud project，Gemini quota 通常仍會一起計算。"
+    )
+
+    st.sidebar.markdown("---")
 
     if st.sidebar.button("🚪 登出系統"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
+
         st.rerun()
+
+else:
+    st.sidebar.info("請先登入。登入後，學生可在這裡貼上自己的 Gemini API Key。")
 
 
 # =========================================================
@@ -721,13 +758,14 @@ if not st.session_state.is_logged_in:
     st.title("🔐 助人技巧 AI 模擬系統")
 
     if not WHITELIST:
-        st.warning("尚未設定學生白名單。請在 Streamlit secrets 的 [whitelist] 區塊加入學號與信箱。")
+        st.warning("尚未設定學生白名單。請在 Streamlit Secrets 的 [whitelist] 區塊加入學號與信箱。")
 
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
         if not st.session_state.otp_sent:
             st.write("請輸入您的學號，系統將寄送驗證碼至您綁定的信箱。")
+
             sid_input = st.text_input(
                 "📝 請輸入學號 Student ID：",
                 placeholder="例如：MB1132018",
@@ -756,6 +794,7 @@ if not st.session_state.is_logged_in:
         else:
             email = st.session_state.target_email
             masked_email = email[:3] + "***@" + email.split("@")[-1]
+
             st.success(f"📧 驗證碼已寄至您的信箱：{masked_email}")
 
             otp_val = st.text_input("🔑 請輸入 6 位數驗證碼：", max_chars=6)
@@ -799,7 +838,7 @@ elif not st.session_state.is_started:
 
         if st.button("🚀 開始演練", type="primary"):
             if not st.session_state.api_keys:
-                st.error("❌ 請先設定至少一組 Gemini API Key。")
+                st.error("❌ 請先在左側欄輸入至少 1 組自己的 Gemini API Key。")
             else:
                 st.session_state.context_data = {
                     "case": sel_case,
@@ -816,8 +855,12 @@ elif not st.session_state.is_started:
                 st.session_state.last_memory_update_len = 0
                 st.session_state.is_started = True
 
-                rebuild_chat_session(exclude_last_user=False)
-                st.rerun()
+                try:
+                    rebuild_chat_session(exclude_last_user=False)
+                    st.rerun()
+                except Exception as e:
+                    st.session_state.is_started = False
+                    st.error(f"無法啟動 Gemini：{e}")
 
     with tab2:
         st.write("讀取舊紀錄時，請同時指定本次要延續的個案設定。")
@@ -829,7 +872,7 @@ elif not st.session_state.is_started:
 
         if up_f and st.button("📂 載入進度"):
             if not st.session_state.api_keys:
-                st.error("❌ 請先設定至少一組 Gemini API Key。")
+                st.error("❌ 請先在左側欄輸入至少 1 組自己的 Gemini API Key。")
             else:
                 try:
                     df = pd.read_csv(up_f)
@@ -862,6 +905,10 @@ elif not st.session_state.is_started:
 # 畫面 2：對話演練
 # =========================================================
 elif st.session_state.is_started and not st.session_state.is_ended:
+    if not st.session_state.api_keys:
+        st.error("❌ 你的 Gemini API Key 已清空。請在左側欄重新輸入，或返回首頁重新開始。")
+        st.stop()
+
     ensure_chat_session()
 
     st.title(f"🗣️ 模擬晤談中 ({st.session_state.context_data.get('case')})")
@@ -879,6 +926,7 @@ elif st.session_state.is_started and not st.session_state.is_ended:
 
     for m in st.session_state.history:
         role = "assistant" if m["role"] == "model" else "user"
+
         with st.chat_message(role):
             st.write(m["parts"][0])
 
@@ -905,6 +953,7 @@ elif st.session_state.is_started and not st.session_state.is_ended:
             except Exception as e:
                 if st.session_state.history and st.session_state.history[-1]["role"] == "user":
                     st.session_state.history.pop()
+
                 st.error(f"連線異常：{e}")
 
     st.markdown("---")
@@ -917,13 +966,20 @@ elif st.session_state.is_started and not st.session_state.is_ended:
             st.rerun()
 
     with c2:
-        st.caption(f"完整紀錄目前 {len(st.session_state.history)} 則；實際對話只送最近 {RECENT_TURNS_FOR_CLIENT} 則加摘要，以節省 token。")
+        st.caption(
+            f"完整紀錄目前 {len(st.session_state.history)} 則；"
+            f"實際對話只送最近 {RECENT_TURNS_FOR_CLIENT} 則加摘要，以節省 token。"
+        )
 
 
 # =========================================================
 # 畫面 3：督導報告
 # =========================================================
 elif st.session_state.is_ended:
+    if not st.session_state.api_keys:
+        st.error("❌ 你的 Gemini API Key 已清空。請在左側欄重新輸入後再產生督導報告。")
+        st.stop()
+
     st.title("📋 臨床督導回饋報告")
 
     if not st.session_state.supervisor_feedback:
